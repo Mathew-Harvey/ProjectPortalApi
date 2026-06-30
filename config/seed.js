@@ -66,7 +66,9 @@ async function seedDemo(runner) {
   }
   const projectId = project.rows[0].id;
 
-  // One user per role
+  // One user per role. These are seeded demo accounts, so we keep their
+  // password in sync with SEED_PASSWORD on every run — otherwise changing
+  // SEED_PASSWORD after the first deploy would silently have no effect.
   const password = process.env.SEED_PASSWORD || 'Password123';
   const passwordHash = await bcrypt.hash(password, 12);
   const users = {};
@@ -77,6 +79,11 @@ async function seedDemo(runner) {
         `INSERT INTO app_user (org_id, email, name, role, password_hash)
          VALUES ($1, $2, $3, $4, $5) RETURNING id, role`,
         [orgId, u.email, u.name, u.role, passwordHash]
+      );
+    } else {
+      await runner.query(
+        'UPDATE app_user SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+        [passwordHash, row.rows[0].id]
       );
     }
     users[u.role] = row.rows[0].id;
