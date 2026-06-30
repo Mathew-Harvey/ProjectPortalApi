@@ -8,6 +8,7 @@
 
 const pool = require('../config/db');
 const { sendEmail } = require('./email');
+const { signInviteToken } = require('../middleware/auth');
 
 const ROLE_LABELS = {
   admin_pm: 'PM / Integrator',
@@ -62,8 +63,10 @@ function renderEmail({ title, message, workItem, url, ctaLabel, redirectedFrom }
   </body></html>`;
 }
 
-// Core: email the given roles + the work item's extra notify addresses.
-async function handoff({ workItem, roles = [], title, message, ctaLabel }) {
+// Core: email each recipient (role users + the work item's extra addresses) an
+// individual link carrying a personal invite token, so clicking it lets them
+// view the work item and claim an account with `inviteRole` to complete the step.
+async function handoff({ workItem, roles = [], inviteRole, title, message, ctaLabel }) {
   // Tests don't exercise real email; skip to keep them deterministic and avoid
   // async DB queries running after the suite tears down.
   if (process.env.NODE_ENV === 'test') return { skipped: true };
@@ -72,16 +75,22 @@ async function handoff({ workItem, roles = [], title, message, ctaLabel }) {
     const extra = Array.isArray(workItem.notify_emails) ? workItem.notify_emails : [];
     const intended = dedupeEmails([...roleEmails, ...extra]);
     if (intended.length === 0) return { skipped: true, reason: 'no_recipients' };
-    const url = `${clientUrl()}/work-items/${workItem.id}`;
 
     // Catch-all for testing without a verified domain: when NOTIFY_REDIRECT_TO
-    // is set, every notification is delivered to that single address instead,
-    // with the real recipients shown in the email. Lets you exercise the whole
-    // flow while sending from Resend's shared onboarding@resend.dev sender.
+    // is set, deliver to that address instead (the real recipient is shown in
+    // the email). Lets you exercise the flow from Resend's shared sender.
     const redirect = (process.env.NOTIFY_REDIRECT_TO || '').trim().toLowerCase();
-    const to = redirect ? [redirect] : intended;
-    const html = renderEmail({ title, message, workItem, url, ctaLabel, redirectedFrom: redirect ? intended : null });
-    return await sendEmail({ to, subject: `[Franmarine] ${title}`, html });
+    const role = inviteRole || roles[0] || 'field';
+
+    const results = [];
+    for (const email of intended) {
+      const token = signInviteToken({ email, role, workItemId: workItem.id });
+      const url = `${clientUrl()}/work-items/${workItem.id}?invite=${encodeURIComponent(token)}`;
+      const to = redirect ? [redirect] : [email];
+      const html = renderEmail({ title, message, workItem, url, ctaLabel, redirectedFrom: redirect ? [email] : null });
+      results.push(await sendEmail({ to, subject: `[Franmarine] ${title}`, html }));
+    }
+    return { sent: results.length };
   } catch (err) {
     console.error('[notify] handoff failed:', err.message);
     return { error: err.message };
@@ -92,35 +101,35 @@ async function handoff({ workItem, roles = [], title, message, ctaLabel }) {
 const steps = {
   // RDS captured (find) -> engineer must spec & approve.
   specRequired: (wi) => handoff({
-    workItem: wi, roles: ['engineer'],
+    workItem: wi, roles: ['engineer'], inviteRole: 'engineer',
     title: `Engineering spec required: ${wi.ref_code}`,
     message: 'A new work item has been raised from an RDS. An engineering specification and approval are required before any execution can begin.',
     ctaLabel: 'Review & submit the spec',
   }),
   // spec approved (-> fix) -> field crew can execute / sign hold points.
   executionAuthorised: (wi) => handoff({
-    workItem: wi, roles: ['field'],
+    workItem: wi, roles: ['field'], inviteRole: 'field',
     title: `Execution authorised: ${wi.ref_code}`,
     message: 'The engineering spec has been approved and the gate is open. ITP hold points are now ready to be signed off as the work is carried out.',
     ctaLabel: 'Open the ITP checklist',
   }),
   // QA captured (-> verify) -> client must sign off.
   clientSignOffRequired: (wi) => handoff({
-    workItem: wi, roles: ['client'],
+    workItem: wi, roles: ['client'], inviteRole: 'client',
     title: `Client sign-off required: ${wi.ref_code}`,
     message: 'QA has been captured for this repair. Your client sign-off is required to confirm acceptance.',
     ctaLabel: 'Review QA & sign off',
   }),
   // client signed -> PM can close.
   readyToClose: (wi) => handoff({
-    workItem: wi, roles: ['admin_pm'],
+    workItem: wi, roles: ['admin_pm'], inviteRole: 'admin_pm',
     title: `Ready to close: ${wi.ref_code}`,
     message: 'The client has signed off the QA record. This work item is verified and ready to be closed.',
     ctaLabel: 'Open the work item',
   }),
   // closed -> courtesy notice to the client + extra recipients.
   closed: (wi) => handoff({
-    workItem: wi, roles: ['client'],
+    workItem: wi, roles: ['client'], inviteRole: 'client',
     title: `Completed & closed: ${wi.ref_code}`,
     message: 'This repair has been verified, signed off and closed. The full doc pack is available to download from the work item.',
     ctaLabel: 'View the closed record',

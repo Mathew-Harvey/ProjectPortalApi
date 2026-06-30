@@ -21,6 +21,7 @@ jest.mock('../config/db', () => mockPool);
 
 const { createSchema } = require('../config/schema');
 const { seedAll } = require('../config/seed');
+const { signInviteToken } = require('../middleware/auth');
 const app = require('../index');
 
 const PW = 'Password123';
@@ -205,6 +206,51 @@ describe.each(['weld', 'composite'])('lifecycle: %s', (method) => {
       expect(e.actor_name).toBeTruthy();
       expect(e.created_at).toBeTruthy();
     }
+  });
+});
+
+describe('invite / claim flow', () => {
+  let wiId;
+  beforeAll(async () => {
+    const res = await request(app).post('/api/work-items').set('Cookie', pm).send({
+      projectId, refCode: 'INVITE-01', method: 'weld',
+    });
+    wiId = res.body.workItem.id;
+  });
+
+  test('invite-view returns the card for a valid token without a session', async () => {
+    const token = signInviteToken({ email: 'NewEng@ext.com', role: 'engineer', workItemId: wiId });
+    const res = await request(app).get(`/api/work-items/${wiId}/invite-view?token=${encodeURIComponent(token)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.workItem.id).toBe(wiId);
+    expect(res.body.invite).toEqual(expect.objectContaining({ role: 'engineer', exists: false }));
+  });
+
+  test('invite-view rejects an invalid token', async () => {
+    const res = await request(app).get(`/api/work-items/${wiId}/invite-view?token=garbage`);
+    expect(res.status).toBe(401);
+  });
+
+  test('claim creates a new account with the invite role and can act', async () => {
+    const token = signInviteToken({ email: 'neweng@ext.com', role: 'engineer', workItemId: wiId });
+    const res = await request(app).post('/api/auth/claim-invite').send({ token, password: 'Password123' });
+    expect(res.status).toBe(201);
+    expect(res.body.created).toBe(true);
+    expect(res.body.user.role).toBe('engineer');
+    expect(res.body.user.email).toBe('neweng@ext.com');
+    // the freshly-created engineer can perform their step
+    const spec = await request(app).post(`/api/work-items/${wiId}/spec`).set('Cookie', res.headers['set-cookie']).send({ notes: 'via invite' });
+    expect(spec.status).toBe(201);
+  });
+
+  test('claim for an existing email verifies password and keeps its own role', async () => {
+    const token = signInviteToken({ email: 'pm@franmarine.com.au', role: 'client', workItemId: wiId });
+    const bad = await request(app).post('/api/auth/claim-invite').send({ token, password: 'wrongpass' });
+    expect(bad.status).toBe(401);
+    const good = await request(app).post('/api/auth/claim-invite').send({ token, password: PW });
+    expect(good.status).toBe(200);
+    expect(good.body.created).toBe(false);
+    expect(good.body.user.role).toBe('admin_pm');
   });
 });
 

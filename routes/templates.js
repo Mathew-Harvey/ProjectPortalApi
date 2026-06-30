@@ -1,12 +1,13 @@
 const express = require('express');
 const pool = require('../config/db');
-const { auth } = require('../middleware/auth');
 
 const router = express.Router();
 
 // GET /api/templates?method=&kind= — template-driven form/layout definitions.
-// Any authenticated role may read templates (they drive the UI for everyone).
-router.get('/', auth, async (req, res) => {
+// Public: templates are generic seed/config (no tenant data), and invited guests
+// previewing a work item need them to render the RDS/QA forms before they have
+// an account.
+router.get('/', async (req, res) => {
   const { method, kind } = req.query;
   const clauses = [];
   const params = [];

@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const pool = require('../config/db');
-const { auth, requireRole, validateId } = require('../middleware/auth');
+const { auth, requireRole, validateId, verifyInviteToken } = require('../middleware/auth');
 const events = require('../services/events');
 const mediaSvc = require('../services/media');
 const notify = require('../services/notify');
@@ -174,44 +174,69 @@ router.post('/', auth, requireRole('admin_pm'), async (req, res) => {
   }
 });
 
+// Assemble the full work-item card (inspection/specs/hold points/qa/media/events).
+// Shared by the authenticated GET and the invite-view (guest) read.
+async function buildCard(wi) {
+  const [inspection, specs, holdPoints, qa, media] = await Promise.all([
+    pool.query('SELECT * FROM inspection WHERE work_item_id = $1 ORDER BY captured_at DESC LIMIT 1', [wi.id]),
+    pool.query(
+      `SELECT s.*, e.name AS engineer_name, a.name AS approver_name
+       FROM spec s
+       LEFT JOIN app_user e ON s.engineer_id = e.id
+       LEFT JOIN app_user a ON s.approved_by = a.id
+       WHERE s.work_item_id = $1 ORDER BY s.created_at ASC`, [wi.id]),
+    pool.query(
+      `SELECT h.*, u.name AS signer_name
+       FROM hold_point h LEFT JOIN app_user u ON h.signed_by = u.id
+       WHERE h.work_item_id = $1 ORDER BY h.sequence ASC`, [wi.id]),
+    pool.query('SELECT * FROM qa_record WHERE work_item_id = $1 ORDER BY created_at DESC LIMIT 1', [wi.id]),
+    pool.query(
+      `SELECT id, work_item_id, url, mime, sha256, exif, byte_size, original_filename, captured_at, uploaded_by, created_at
+       FROM media WHERE work_item_id = $1 ORDER BY created_at ASC`, [wi.id]),
+  ]);
+  const timeline = await events.listForWorkItem(wi.id);
+  return {
+    workItem: wi,
+    inspection: inspection.rows[0] || null,
+    specs: specs.rows,
+    holdPoints: holdPoints.rows,
+    qa: qa.rows[0] || null,
+    media: media.rows,
+    events: timeline,
+  };
+}
+
 // ── full card ──────────────────────────────────────────────────────
 // GET /api/work-items/:id
 router.get('/:id', auth, validateId('id'), async (req, res) => {
   try {
     const wi = await getWorkItem(req.params.id, req.user.orgId);
     if (!wi) return res.status(404).json({ error: 'Work item not found' });
-
-    const [inspection, specs, holdPoints, qa, media] = await Promise.all([
-      pool.query('SELECT * FROM inspection WHERE work_item_id = $1 ORDER BY captured_at DESC LIMIT 1', [wi.id]),
-      pool.query(
-        `SELECT s.*, e.name AS engineer_name, a.name AS approver_name
-         FROM spec s
-         LEFT JOIN app_user e ON s.engineer_id = e.id
-         LEFT JOIN app_user a ON s.approved_by = a.id
-         WHERE s.work_item_id = $1 ORDER BY s.created_at ASC`, [wi.id]),
-      pool.query(
-        `SELECT h.*, u.name AS signer_name
-         FROM hold_point h LEFT JOIN app_user u ON h.signed_by = u.id
-         WHERE h.work_item_id = $1 ORDER BY h.sequence ASC`, [wi.id]),
-      pool.query('SELECT * FROM qa_record WHERE work_item_id = $1 ORDER BY created_at DESC LIMIT 1', [wi.id]),
-      pool.query(
-        `SELECT id, work_item_id, url, mime, sha256, exif, byte_size, original_filename, captured_at, uploaded_by, created_at
-         FROM media WHERE work_item_id = $1 ORDER BY created_at ASC`, [wi.id]),
-    ]);
-
-    const timeline = await events.listForWorkItem(wi.id);
-
-    res.json({
-      workItem: wi,
-      inspection: inspection.rows[0] || null,
-      specs: specs.rows,
-      holdPoints: holdPoints.rows,
-      qa: qa.rows[0] || null,
-      media: media.rows,
-      events: timeline,
-    });
+    res.json(await buildCard(wi));
   } catch (err) {
     console.error('Get work item error:', err);
+    res.status(500).json({ error: 'Failed to load work item' });
+  }
+});
+
+// ── invite preview (no session) ────────────────────────────────────
+// GET /api/work-items/:id/invite-view?token=...
+// Lets a person who was emailed a step view the work item read-only before they
+// have an account. The token is bound to this work item id.
+router.get('/:id/invite-view', validateId('id'), async (req, res) => {
+  const decoded = verifyInviteToken(req.query.token);
+  if (!decoded || decoded.workItemId !== req.params.id) {
+    return res.status(401).json({ error: 'invalid_invite', message: 'This invite link is invalid or has expired.' });
+  }
+  try {
+    const wiRes = await pool.query('SELECT * FROM work_item WHERE id = $1', [req.params.id]);
+    const wi = wiRes.rows[0];
+    if (!wi) return res.status(404).json({ error: 'Work item not found' });
+    const card = await buildCard(wi);
+    const existing = await pool.query('SELECT 1 FROM app_user WHERE email = $1', [decoded.email.toLowerCase()]);
+    res.json({ ...card, invite: { email: decoded.email, role: decoded.role, exists: existing.rows.length > 0 } });
+  } catch (err) {
+    console.error('Invite view error:', err);
     res.status(500).json({ error: 'Failed to load work item' });
   }
 });

@@ -29,6 +29,28 @@ function signToken(user) {
   );
 }
 
+// Invite token: emailed to a person who is "sent a step". It authorises them to
+// view that one work item and to claim an account with the step's role. Signed
+// with JWT_SECRET; typ:'invite' keeps it distinct from session tokens.
+const INVITE_LIFETIME = '14d';
+function signInviteToken({ email, role, workItemId }) {
+  return jwt.sign(
+    { typ: 'invite', email: String(email).toLowerCase(), role, workItemId },
+    process.env.JWT_SECRET,
+    { expiresIn: INVITE_LIFETIME }
+  );
+}
+function verifyInviteToken(token) {
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.typ !== 'invite' || !decoded.email || !decoded.workItemId) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
 // Verify the JWT cookie, then re-read the user from the DB every request so role
 // changes / deactivation take effect without re-login (mirrors AppHub).
 function auth(req, res, next) {
@@ -97,6 +119,8 @@ module.exports = {
   requireRole,
   validateId,
   signToken,
+  signInviteToken,
+  verifyInviteToken,
   getCookieOptions,
   getClearCookieOptions,
   UUID_REGEX,

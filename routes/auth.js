@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
-const { auth, signToken, getCookieOptions, getClearCookieOptions } = require('../middleware/auth');
+const { auth, signToken, getCookieOptions, getClearCookieOptions, verifyInviteToken } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -60,6 +60,74 @@ router.post('/register', async (req, res) => {
   } catch (err) {
     console.error('Register error:', err);
     res.status(500).json({ error: 'Registration failed' });
+  }
+});
+
+// Derive a display name from an email local-part: "dee.diver@x" -> "Dee Diver".
+function nameFromEmail(email) {
+  const local = String(email).split('@')[0] || '';
+  const parts = local.split(/[._+-]+/).filter(Boolean);
+  if (parts.length === 0) return email;
+  return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+}
+
+// POST /api/auth/claim-invite — complete an emailed step invite.
+// If the email already has an account, this is a sign-in (verify password).
+// Otherwise it creates an account with the invite's role and signs in.
+router.post('/claim-invite', async (req, res) => {
+  const { token, password } = req.body || {};
+  if (!token || !password) {
+    return res.status(400).json({ error: 'token and password are required' });
+  }
+  const decoded = verifyInviteToken(token);
+  if (!decoded || !ROLES.includes(decoded.role)) {
+    return res.status(400).json({ error: 'invalid_invite', message: 'This invite link is invalid or has expired.' });
+  }
+  const email = String(decoded.email).toLowerCase().trim();
+
+  try {
+    const existing = await pool.query(
+      'SELECT id, email, name, role, org_id, password_hash, is_active FROM app_user WHERE email = $1',
+      [email]
+    );
+
+    // Existing account -> sign in (verify password).
+    if (existing.rows.length > 0) {
+      const row = existing.rows[0];
+      if (row.is_active === false) {
+        return res.status(401).json({ error: 'account_inactive', message: 'This account is no longer active.' });
+      }
+      const ok = await bcrypt.compare(password, row.password_hash);
+      if (!ok) {
+        return res.status(401).json({ error: 'invalid_password', message: 'Incorrect password.', exists: true });
+      }
+      const t = signToken({ id: row.id, email: row.email, org_id: row.org_id, role: row.role });
+      res.cookie('token', t, getCookieOptions());
+      return res.json({ user: publicUser(row), created: false });
+    }
+
+    // New account -> create with the invite's role, attached to the work item's org.
+    if (!validatePassword(password)) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters with one uppercase letter and one number' });
+    }
+    const wi = await pool.query('SELECT org_id FROM work_item WHERE id = $1', [decoded.workItemId]);
+    if (wi.rows.length === 0) {
+      return res.status(400).json({ error: 'invalid_invite', message: 'The work item for this invite no longer exists.' });
+    }
+    const orgId = wi.rows[0].org_id;
+    const passwordHash = await bcrypt.hash(password, 12);
+    const inserted = await pool.query(
+      `INSERT INTO app_user (org_id, email, name, role, password_hash)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id, email, name, role, org_id`,
+      [orgId, email, nameFromEmail(email), decoded.role, passwordHash]
+    );
+    const user = inserted.rows[0];
+    const t = signToken({ id: user.id, email: user.email, org_id: user.org_id, role: user.role });
+    res.cookie('token', t, getCookieOptions());
+    res.status(201).json({ user: publicUser(user), created: true });
+  } catch (err) {
+    console.error('Claim invite error:', err);
+    res.status(500).json({ error: 'Failed to complete invite' });
   }
 });
 
