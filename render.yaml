@@ -26,7 +26,9 @@ services:
       - key: RESEND_API_KEY
         sync: false # Resend API key for step-handoff email notifications (optional)
       - key: EMAIL_FROM
-        sync: false # Sender, e.g. "Franmarine Project Portal <notifications@yourdomain>"
+        value: "Franmarine Project Portal <onboarding@resend.dev>" # Resend shared sender (no domain verification needed)
+      - key: NOTIFY_REDIRECT_TO
+        sync: false # Optional: redirect ALL notifications to this address for testing without a verified domain
 
 databases:
   - name: projectportal-db

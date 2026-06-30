@@ -40,12 +40,16 @@ async function emailsForRoles(orgId, roles) {
   return res.rows.map((r) => r.email);
 }
 
-function renderEmail({ title, message, workItem, url, ctaLabel }) {
+function renderEmail({ title, message, workItem, url, ctaLabel, redirectedFrom }) {
   const ref = workItem.ref_code || 'work item';
   const loc = workItem.location_ref ? ` · ${workItem.location_ref}` : '';
+  const redirectBanner = redirectedFrom && redirectedFrom.length
+    ? `<div style="background:#eef4f7;border:1px solid #d6e6ec;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:12px;color:#0b4f6c">Test mode — this notification was originally addressed to: <strong>${redirectedFrom.join(', ')}</strong></div>`
+    : '';
   return `<!doctype html><html><body style="margin:0;background:#eef2f5;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#16242f">
     <div style="max-width:560px;margin:0 auto;padding:24px">
       <div style="font-weight:700;color:#0b4f6c;font-size:18px;margin-bottom:16px">▰ Franmarine <span style="color:#5d6f7c;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px">Project Portal</span></div>
+      ${redirectBanner}
       <div style="background:#fff;border:1px solid #d8e0e7;border-radius:10px;padding:22px">
         <div style="display:inline-block;background:#fdf2e1;color:#b06a00;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:3px 9px;border-radius:20px;margin-bottom:12px">Action required</div>
         <h1 style="font-size:18px;margin:0 0 8px">${title}</h1>
@@ -66,10 +70,17 @@ async function handoff({ workItem, roles = [], title, message, ctaLabel }) {
   try {
     const roleEmails = await emailsForRoles(workItem.org_id, roles);
     const extra = Array.isArray(workItem.notify_emails) ? workItem.notify_emails : [];
-    const to = dedupeEmails([...roleEmails, ...extra]);
-    if (to.length === 0) return { skipped: true, reason: 'no_recipients' };
+    const intended = dedupeEmails([...roleEmails, ...extra]);
+    if (intended.length === 0) return { skipped: true, reason: 'no_recipients' };
     const url = `${clientUrl()}/work-items/${workItem.id}`;
-    const html = renderEmail({ title, message, workItem, url, ctaLabel });
+
+    // Catch-all for testing without a verified domain: when NOTIFY_REDIRECT_TO
+    // is set, every notification is delivered to that single address instead,
+    // with the real recipients shown in the email. Lets you exercise the whole
+    // flow while sending from Resend's shared onboarding@resend.dev sender.
+    const redirect = (process.env.NOTIFY_REDIRECT_TO || '').trim().toLowerCase();
+    const to = redirect ? [redirect] : intended;
+    const html = renderEmail({ title, message, workItem, url, ctaLabel, redirectedFrom: redirect ? intended : null });
     return await sendEmail({ to, subject: `[Franmarine] ${title}`, html });
   } catch (err) {
     console.error('[notify] handoff failed:', err.message);
