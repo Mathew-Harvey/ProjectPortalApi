@@ -107,8 +107,10 @@ router.post('/', auth, requireRole('admin_pm'), async (req, res) => {
   if (!['weld', 'composite'].includes(method)) {
     return res.status(400).json({ error: "method must be 'weld' or 'composite'" });
   }
-  // Extra stakeholders to email at every handoff for this work item.
-  const notifyEmails = notify.dedupeEmails(Array.isArray(req.body?.notifyEmails) ? req.body.notifyEmails : []);
+  // Per-step assignees: { engineer, field, client } email addresses. Each is
+  // emailed only at their own step, with an invite that creates their account
+  // in that role — so the person you send a step to can actually do it.
+  const assignees = notify.cleanAssignees(req.body?.assignees);
 
   const project = await pool.query('SELECT id, org_id FROM project WHERE id = $1 AND org_id = $2', [projectId, req.user.orgId]);
   if (project.rows.length === 0) {
@@ -126,9 +128,9 @@ router.post('/', auth, requireRole('admin_pm'), async (req, res) => {
     }
 
     const wiResult = await client.query(
-      `INSERT INTO work_item (project_id, org_id, ref_code, location_ref, method, status, notify_emails, created_by)
+      `INSERT INTO work_item (project_id, org_id, ref_code, location_ref, method, status, assignees, created_by)
        VALUES ($1, $2, $3, $4, $5, 'find', $6::jsonb, $7) RETURNING *`,
-      [projectId, orgId, refCode, locationRef || null, method, JSON.stringify(notifyEmails), req.user.id]
+      [projectId, orgId, refCode, locationRef || null, method, JSON.stringify(assignees), req.user.id]
     );
     const wi = wiResult.rows[0];
 

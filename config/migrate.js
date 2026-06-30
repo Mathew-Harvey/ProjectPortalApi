@@ -14,6 +14,7 @@ async function migrate() {
     // Additive migrations for already-deployed databases (no-ops on fresh DBs
     // where createSchema already added the column).
     await client.query(`ALTER TABLE work_item ADD COLUMN IF NOT EXISTS notify_emails JSONB NOT NULL DEFAULT '[]'::jsonb`);
+    await client.query(`ALTER TABLE work_item ADD COLUMN IF NOT EXISTS assignees JSONB NOT NULL DEFAULT '{}'::jsonb`);
     await client.query('COMMIT');
     console.log('Migration complete.');
   } catch (err) {

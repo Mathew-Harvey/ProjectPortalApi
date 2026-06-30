@@ -89,13 +89,13 @@ describe.each(['weld', 'composite'])('lifecycle: %s', (method) => {
       refCode: ref,
       locationRef: 'Pile P-14, splash zone',
       method,
-      notifyEmails: ['Extra@Stakeholder.com', 'extra@stakeholder.com'],
+      assignees: { engineer: 'Eng@x.com', client: 'client@y.com', field: 'not-an-email', bogus: 'z@z.com' },
       inspection: { data: { defect_type: 'Corrosion / section loss', member: 'Pile P-14' } },
     });
     expect(res.status).toBe(201);
     expect(res.body.workItem.status).toBe('find');
-    // notify list is stored, normalised and de-duplicated
-    expect(res.body.workItem.notify_emails).toEqual(['extra@stakeholder.com']);
+    // assignees are normalised: lowercased, only valid roles + email-shaped values
+    expect(res.body.workItem.assignees).toEqual({ engineer: 'eng@x.com', client: 'client@y.com' });
     workItemId = res.body.workItem.id;
 
     const card = await request(app).get(`/api/work-items/${workItemId}`).set('Cookie', pm);
@@ -251,6 +251,53 @@ describe('invite / claim flow', () => {
     expect(good.status).toBe(200);
     expect(good.body.created).toBe(false);
     expect(good.body.user.role).toBe('admin_pm');
+  });
+});
+
+describe('user account management', () => {
+  test('non-admin cannot list users', async () => {
+    const res = await request(app).get('/api/users').set('Cookie', engineer);
+    expect(res.status).toBe(403);
+  });
+
+  test('PM lists, creates, and updates users', async () => {
+    const list = await request(app).get('/api/users').set('Cookie', pm);
+    expect(list.status).toBe(200);
+    expect(list.body.users.length).toBeGreaterThanOrEqual(4);
+
+    const created = await request(app).post('/api/users').set('Cookie', pm)
+      .send({ email: 'new.crew@franmarine.com.au', name: 'New Crew', role: 'field', password: 'Password123' });
+    expect(created.status).toBe(201);
+    const uid = created.body.user.id;
+    expect(created.body.user.role).toBe('field');
+
+    const promoted = await request(app).put(`/api/users/${uid}`).set('Cookie', pm).send({ role: 'engineer' });
+    expect(promoted.status).toBe(200);
+    expect(promoted.body.user.role).toBe('engineer');
+
+    const deactivated = await request(app).put(`/api/users/${uid}`).set('Cookie', pm).send({ isActive: false });
+    expect(deactivated.status).toBe(200);
+    expect(deactivated.body.user.isActive).toBe(false);
+  });
+
+  test('cannot remove the last active PM', async () => {
+    // The seed has exactly one admin_pm; demoting it must be refused.
+    const list = await request(app).get('/api/users').set('Cookie', pm);
+    const adminId = list.body.users.find((u) => u.role === 'admin_pm').id;
+    const res = await request(app).put(`/api/users/${adminId}`).set('Cookie', pm).send({ role: 'field' });
+    expect(res.status).toBe(400);
+  });
+
+  test('user can change their own password', async () => {
+    const wrong = await request(app).post('/api/auth/change-password').set('Cookie', field)
+      .send({ currentPassword: 'nope', newPassword: 'NewPass123' });
+    expect(wrong.status).toBe(401);
+    const ok = await request(app).post('/api/auth/change-password').set('Cookie', field)
+      .send({ currentPassword: PW, newPassword: 'NewPass123' });
+    expect(ok.status).toBe(200);
+    // restore so later assertions using PW still work for field if any
+    await request(app).post('/api/auth/change-password').set('Cookie', field)
+      .send({ currentPassword: 'NewPass123', newPassword: PW });
   });
 });
 

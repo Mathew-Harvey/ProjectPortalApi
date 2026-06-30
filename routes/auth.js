@@ -168,6 +168,46 @@ router.post('/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// PUT /api/auth/profile — update the signed-in user's own display name.
+router.put('/profile', auth, async (req, res) => {
+  const { name } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'name is required' });
+  try {
+    const result = await pool.query(
+      'UPDATE app_user SET name = $1, updated_at = NOW() WHERE id = $2 RETURNING id, email, name, role, org_id',
+      [String(name).trim(), req.user.id]
+    );
+    const u = result.rows[0];
+    res.json({ user: { id: u.id, email: u.email, name: u.name, role: u.role, orgId: u.org_id } });
+  } catch (err) {
+    console.error('Update profile error:', err);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
+// POST /api/auth/change-password — change the signed-in user's own password.
+router.post('/change-password', auth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'currentPassword and newPassword are required' });
+  }
+  if (!validatePassword(newPassword)) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters with one uppercase letter and one number' });
+  }
+  try {
+    const result = await pool.query('SELECT password_hash FROM app_user WHERE id = $1', [req.user.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const ok = await bcrypt.compare(currentPassword, result.rows[0].password_hash);
+    if (!ok) return res.status(401).json({ error: 'Current password is incorrect' });
+    const hash = await bcrypt.hash(newPassword, 12);
+    await pool.query('UPDATE app_user SET password_hash = $1, updated_at = NOW() WHERE id = $2', [hash, req.user.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Change password error:', err);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
 // GET /api/auth/me
 router.get('/me', auth, async (req, res) => {
   try {

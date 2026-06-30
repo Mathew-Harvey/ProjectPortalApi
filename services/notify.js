@@ -41,6 +41,21 @@ async function emailsForRoles(orgId, roles) {
   return res.rows.map((r) => r.email);
 }
 
+// Validate a per-step assignee map { engineer, field, client } -> cleaned emails.
+// admin_pm is intentionally excluded — the PM is the creator, not an invitee.
+const ASSIGNABLE_ROLES = ['engineer', 'field', 'client'];
+function cleanAssignees(obj) {
+  const out = {};
+  if (!obj || typeof obj !== 'object') return out;
+  for (const role of ASSIGNABLE_ROLES) {
+    const raw = obj[role];
+    if (typeof raw === 'string' && raw.includes('@')) {
+      out[role] = raw.trim().toLowerCase();
+    }
+  }
+  return out;
+}
+
 function renderEmail({ title, message, workItem, url, ctaLabel, redirectedFrom }) {
   const ref = workItem.ref_code || 'work item';
   const loc = workItem.location_ref ? ` · ${workItem.location_ref}` : '';
@@ -71,16 +86,19 @@ async function handoff({ workItem, roles = [], inviteRole, title, message, ctaLa
   // async DB queries running after the suite tears down.
   if (process.env.NODE_ENV === 'test') return { skipped: true };
   try {
+    const role = inviteRole || roles[0] || 'field';
     const roleEmails = await emailsForRoles(workItem.org_id, roles);
-    const extra = Array.isArray(workItem.notify_emails) ? workItem.notify_emails : [];
-    const intended = dedupeEmails([...roleEmails, ...extra]);
+    // The assignee for THIS step's role only — so each person is emailed solely
+    // for the step they were assigned, and claims an account in that role.
+    const assignees = (workItem.assignees && typeof workItem.assignees === 'object') ? workItem.assignees : {};
+    const assignee = assignees[role];
+    const intended = dedupeEmails([...roleEmails, ...(assignee ? [assignee] : [])]);
     if (intended.length === 0) return { skipped: true, reason: 'no_recipients' };
 
     // Catch-all for testing without a verified domain: when NOTIFY_REDIRECT_TO
     // is set, deliver to that address instead (the real recipient is shown in
     // the email). Lets you exercise the flow from Resend's shared sender.
     const redirect = (process.env.NOTIFY_REDIRECT_TO || '').trim().toLowerCase();
-    const role = inviteRole || roles[0] || 'field';
 
     const results = [];
     for (const email of intended) {
@@ -136,4 +154,4 @@ const steps = {
   }),
 };
 
-module.exports = { handoff, steps, dedupeEmails, ROLE_LABELS };
+module.exports = { handoff, steps, dedupeEmails, cleanAssignees, ASSIGNABLE_ROLES, ROLE_LABELS };

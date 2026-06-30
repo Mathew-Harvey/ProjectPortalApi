@@ -11,6 +11,7 @@ const authRoutes = require('./routes/auth');
 const projectRoutes = require('./routes/projects');
 const workItemRoutes = require('./routes/workItems');
 const templateRoutes = require('./routes/templates');
+const userRoutes = require('./routes/users');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -84,6 +85,7 @@ app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/projects', apiLimiter, projectRoutes);
 app.use('/api/work-items', apiLimiter, workItemRoutes);
 app.use('/api/templates', apiLimiter, templateRoutes);
+app.use('/api/users', apiLimiter, userRoutes);
 
 // Global error handler (multer limits, JSON parse errors, etc.)
 app.use((err, req, res, _next) => {
