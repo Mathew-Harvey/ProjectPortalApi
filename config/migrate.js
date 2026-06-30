@@ -11,6 +11,9 @@ async function migrate() {
     await client.query('BEGIN');
     await client.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
     await createSchema(client);
+    // Additive migrations for already-deployed databases (no-ops on fresh DBs
+    // where createSchema already added the column).
+    await client.query(`ALTER TABLE work_item ADD COLUMN IF NOT EXISTS notify_emails JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await client.query('COMMIT');
     console.log('Migration complete.');
   } catch (err) {

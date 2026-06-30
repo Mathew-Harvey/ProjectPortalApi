@@ -5,6 +5,7 @@ const pool = require('../config/db');
 const { auth, requireRole, validateId } = require('../middleware/auth');
 const events = require('../services/events');
 const mediaSvc = require('../services/media');
+const notify = require('../services/notify');
 const { streamDocPack } = require('../services/docpack');
 
 const router = express.Router();
@@ -106,6 +107,8 @@ router.post('/', auth, requireRole('admin_pm'), async (req, res) => {
   if (!['weld', 'composite'].includes(method)) {
     return res.status(400).json({ error: "method must be 'weld' or 'composite'" });
   }
+  // Extra stakeholders to email at every handoff for this work item.
+  const notifyEmails = notify.dedupeEmails(Array.isArray(req.body?.notifyEmails) ? req.body.notifyEmails : []);
 
   const project = await pool.query('SELECT id, org_id FROM project WHERE id = $1 AND org_id = $2', [projectId, req.user.orgId]);
   if (project.rows.length === 0) {
@@ -123,9 +126,9 @@ router.post('/', auth, requireRole('admin_pm'), async (req, res) => {
     }
 
     const wiResult = await client.query(
-      `INSERT INTO work_item (project_id, org_id, ref_code, location_ref, method, status, created_by)
-       VALUES ($1, $2, $3, $4, $5, 'find', $6) RETURNING *`,
-      [projectId, orgId, refCode, locationRef || null, method, req.user.id]
+      `INSERT INTO work_item (project_id, org_id, ref_code, location_ref, method, status, notify_emails, created_by)
+       VALUES ($1, $2, $3, $4, $5, 'find', $6::jsonb, $7) RETURNING *`,
+      [projectId, orgId, refCode, locationRef || null, method, JSON.stringify(notifyEmails), req.user.id]
     );
     const wi = wiResult.rows[0];
 
@@ -165,6 +168,9 @@ router.post('/', auth, requireRole('admin_pm'), async (req, res) => {
 
   if (created && !res.headersSent) {
     res.status(201).json({ workItem: created });
+    // Notify the engineer (+ any extra emails) that a spec is required. Fire-
+    // and-forget so email never blocks or breaks the response.
+    notify.steps.specRequired(created);
   }
 });
 
@@ -309,7 +315,10 @@ router.post('/:id/spec/:specId/approve', auth, validateId('id'), validateId('spe
     await transitionTo(client, wi, 'fix', req.user.id, { reason: 'spec.approved' });
     return { specId: spec.id };
   });
-  if (out && !res.headersSent) res.json({ ok: true, specId: out.specId, status: 'fix' });
+  if (out && !res.headersSent) {
+    res.json({ ok: true, specId: out.specId, status: 'fix' });
+    notify.steps.executionAuthorised(wi); // field crew can now sign hold points
+  }
 });
 
 // ── sign ITP hold point (fix action — blocked until approved) ──────
@@ -363,7 +372,10 @@ router.post('/:id/qa', auth, validateId('id'), requireRole('field', 'admin_pm'),
     await transitionTo(client, wi, 'verify', req.user.id, { reason: 'qa.captured' });
     return qa.rows[0];
   });
-  if (out && !res.headersSent) res.status(201).json({ qa: out, status: 'verify' });
+  if (out && !res.headersSent) {
+    res.status(201).json({ qa: out, status: 'verify' });
+    notify.steps.clientSignOffRequired(wi); // client must sign off
+  }
 });
 
 // ── client sign-off on QA (verify) ─────────────────────────────────
@@ -384,7 +396,10 @@ router.post('/:id/qa/:qaId/client-sign', auth, validateId('id'), validateId('qaI
     });
     return { qaId: qa.id };
   });
-  if (out && !res.headersSent) res.json({ ok: true, qaId: out.qaId });
+  if (out && !res.headersSent) {
+    res.json({ ok: true, qaId: out.qaId });
+    notify.steps.readyToClose(wi); // PM can close
+  }
 });
 
 // ── close (verify -> closed) ───────────────────────────────────────
@@ -403,7 +418,10 @@ router.post('/:id/close', auth, validateId('id'), requireRole('admin_pm'), async
     });
     return { id: wi.id };
   });
-  if (out && !res.headersSent) res.json({ ok: true, status: 'closed' });
+  if (out && !res.headersSent) {
+    res.json({ ok: true, status: 'closed' });
+    notify.steps.closed(wi); // courtesy completion notice
+  }
 });
 
 // ── media upload (sha256 + exif at capture) ────────────────────────

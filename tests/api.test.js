@@ -88,10 +88,13 @@ describe.each(['weld', 'composite'])('lifecycle: %s', (method) => {
       refCode: ref,
       locationRef: 'Pile P-14, splash zone',
       method,
+      notifyEmails: ['Extra@Stakeholder.com', 'extra@stakeholder.com'],
       inspection: { data: { defect_type: 'Corrosion / section loss', member: 'Pile P-14' } },
     });
     expect(res.status).toBe(201);
     expect(res.body.workItem.status).toBe('find');
+    // notify list is stored, normalised and de-duplicated
+    expect(res.body.workItem.notify_emails).toEqual(['extra@stakeholder.com']);
     workItemId = res.body.workItem.id;
 
     const card = await request(app).get(`/api/work-items/${workItemId}`).set('Cookie', pm);

@@ -23,6 +23,10 @@ services:
         value: no-verify
       - key: SEED_PASSWORD
         sync: false # Demo login password for the seeded one-user-per-role accounts
+      - key: RESEND_API_KEY
+        sync: false # Resend API key for step-handoff email notifications (optional)
+      - key: EMAIL_FROM
+        sync: false # Sender, e.g. "Franmarine Project Portal <notifications@yourdomain>"
 
 databases:
   - name: projectportal-db

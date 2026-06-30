@@ -59,6 +59,7 @@ async function createSchema(client) {
       method VARCHAR(20) NOT NULL CHECK (method IN ('weld', 'composite')),
       status VARCHAR(20) NOT NULL DEFAULT 'find'
         CHECK (status IN ('find', 'engineer', 'fix', 'verify', 'closed')),
+      notify_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
       created_by UUID REFERENCES app_user(id) ON DELETE SET NULL,
       created_at TIMESTAMP NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
