@@ -120,18 +120,16 @@ lifecycle. Every successful mutation calls `events.log(client, {...})`.
 - Forms are **template-driven** (a small renderer maps `definition` field specs to
   inputs) so switching `method` changes only the forms/checklist/QA/doc-pack.
 
-## 6. Open questions (blocking — see chat)
-1. **New dependencies** `exifr` + `pdfkit` (required by the EXIF-at-capture and
-   PDF doc-pack scope). AppHub has neither. Approve?
-2. **Media storage.** Recommend storing media **bytes in Postgres** (matches
-   AppHub's "content in DB" pattern; Render disk is ephemeral) and serving via
-   `GET /api/work-items/:id/media/:mediaId`, with `media.url` holding that API
-   path. Alternative: S3/object storage (new dep + creds). Which?
-3. **Auth scope.** Mirror AppHub JWT-cookie login, seed one user per role with a
-   shared demo password (documented in README/.env). No registration/invite flow
-   (no tenant management). OK?
-
-Default if unanswered: proceed with 1=yes (both), 2=Postgres bytes, 3=as described.
+## 6. Resolved decisions (confirmed in chat)
+1. **New dependencies approved:** `exifr` (EXIF at capture) + `pdfkit` (doc-pack
+   PDF). Both added to ProjectPortalApi only.
+2. **Media storage = Postgres `bytea`.** Bytes live in the DB (mirrors AppHub's
+   "content in DB" pattern; survives Render's ephemeral disk). Served via
+   `GET /api/work-items/:id/media/:mediaId`; `media.url` holds that API path.
+3. **Auth = JWT cookie (AppHub-style) + self-registration.** Seed one user per
+   role with a documented demo password **and** ship a registration flow. New
+   users attach to the single seeded organisation and choose a role from the enum
+   (no permissions matrix, no tenant management). `login`/`logout`/`me` as well.
 
 ## 7. Build order (small, logical commits)
 0. Phase 0 docs (this) — both repos.
